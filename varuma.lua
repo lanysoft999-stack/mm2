@@ -1,4 +1,4 @@
--- [Varuma Hack v5.1 - 2s Death FX, V Logo, Short Config, Fat Tracers]
+-- [Varuma Hack v6.1 - FULL FIX - Sliding Tabs, Trail Behind, Death FX v2]
 
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
@@ -53,7 +53,8 @@ local Config = {
         BoxESP = false, SkeletonESP = false,
         ThirdPerson = false, Fullbright = false, FogEnabled = false,
         FogColorIndex = 1, FogDistance = 500,
-        BulletTracers = false, PlayerTrails = false, JumpEffect = false, JumpEffectColor = 2,
+        BulletTracers = false, PlayerTrails = false, PlayerTrailColor = 1,
+        JumpEffect = false, JumpEffectColor = 2,
         DeathEffects = false, DeathEffectType = 1, DeathEffectColor = 1,
         SelfColor = 1, SelfColorEnabled = false
     },
@@ -117,7 +118,21 @@ local jumpColorValues = {
     Color3.fromRGB(255, 200, 60),
     Color3.fromRGB(245, 245, 250)
 }
+local trailColorNames = {"Red", "Blue", "Cyan", "Purple", "Gold", "Green", "White", "Rainbow"}
+local trailColorValues = {
+    Color3.fromRGB(255, 70, 70),
+    Color3.fromRGB(60, 150, 255),
+    Color3.fromRGB(60, 220, 255),
+    Color3.fromRGB(180, 100, 255),
+    Color3.fromRGB(255, 200, 60),
+    Color3.fromRGB(80, 220, 100),
+    Color3.fromRGB(245, 245, 250),
+    nil -- rainbow flag
+}
 local selfOriginalColors = {}
+
+-- FIX #3: forward declaration для applySelfColor
+local applySelfColor
 
 -- ==================== ROLE STATE ====================
 local myRole = "LOADING"
@@ -258,7 +273,19 @@ local function getFOVColor()
     return fovColorValues[Config.Legit.FOVColor] or fovColorValues[1]
 end
 
--- ==================== DEATH FX WATCHDOG (force cleanup after 2s) ====================
+-- FIX #1: trailRainbowPhase объявлен ПЕРЕД функцией
+local trailRainbowPhase = 0
+
+local function getTrailColor()
+    local idx = Config.Visuals.PlayerTrailColor or 1
+    if idx == 8 then
+        trailRainbowPhase = (trailRainbowPhase + 0.015) % 1
+        return Color3.fromHSV(trailRainbowPhase, 0.85, 1)
+    end
+    return trailColorValues[idx] or trailColorValues[1]
+end
+
+-- ==================== DEATH FX WATCHDOG ====================
 task.spawn(function()
     while not isUnloaded do
         task.wait(1)
@@ -267,7 +294,7 @@ task.spawn(function()
         for _, obj in ipairs(Workspace:GetDescendants()) do
             if obj.Name == "VarumaDeathFX" or obj.Name == "VarumaDeathLight" then
                 local born = obj:GetAttribute("VarumaBorn")
-                if born and (now - born) > 2.0 then
+                if born and (now - born) > 2.1 then
                     pcall(function() obj:Destroy() end)
                 end
             end
@@ -421,8 +448,8 @@ task.spawn(function()
     end
 end)
 
--- ==================== SELF COLOR ====================
-function applySelfColor()
+-- ==================== SELF COLOR (FIX #3) ====================
+applySelfColor = function()
     local char = LocalPlayer.Character
     if not char then return end
     local presetIndex = Config.Visuals.SelfColor
@@ -485,7 +512,7 @@ local function updateSelfChams()
     end
 end
 
--- ==================== FLING v4 ====================
+-- ==================== FLING ====================
 local activeFlings = {}
 local FLING_TICK = 0.02
 local FLING_SPIN_INTERVAL = 0.04
@@ -564,7 +591,7 @@ local function flingPlayer(target)
     end)
 end
 
--- ==================== WATERMARK (with V logo) ====================
+-- ==================== WATERMARK ====================
 local Watermark = Instance.new("Frame")
 Watermark.Parent = ScreenGui
 Watermark.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
@@ -596,7 +623,6 @@ WMAccent.Size = UDim2.new(0, 3, 0, 20)
 WMAccent.ZIndex = 4
 local WMAccentCorner = Instance.new("UICorner"); WMAccentCorner.CornerRadius = UDim.new(0, 2); WMAccentCorner.Parent = WMAccent
 
--- Логотип V
 local WMLogoGlow = Instance.new("TextLabel")
 WMLogoGlow.Parent = Watermark
 WMLogoGlow.BackgroundTransparency = 1
@@ -965,7 +991,7 @@ local function drawSkeleton(player, color)
     if tOn and rlOn then lines[5].From = tp; lines[5].To = rlp; lines[5].Color = color; lines[5].Visible = true else lines[5].Visible = false end
 end
 
--- ==================== BULLET TRACERS (fat, long, through walls) ====================
+-- ==================== BULLET TRACERS ====================
 local function spawnTracer(startPos, endPos, color)
     local line = Drawing.new("Line")
     line.Thickness = 3.5
@@ -1037,9 +1063,13 @@ if LocalPlayer.Character then hookTracerCharacter(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(hookTracerCharacter)
 
 -- ==================== SELF TRAIL ====================
-local TRAIL_MAX_POINTS = 40
-local TRAIL_SAMPLE_DIST = 0.08
+local TRAIL_MAX_POINTS = 48
+local TRAIL_SAMPLE_DIST = 0.12
+local TRAIL_MIN_SPEED = 1.8
+local TRAIL_BEHIND_OFFSET = 1.4
+local TRAIL_BEHIND_DOWN = 0.4
 local selfTrail = nil
+-- NOTE: trailRainbowPhase уже объявлен выше, здесь НЕ дублируем
 
 local function getSelfTrail()
     if not selfTrail then
@@ -1051,21 +1081,23 @@ local function getSelfTrail()
             l.Visible = false
             segments[i] = l
         end
-        selfTrail = {segments = segments, history = {}, lastPoint = nil}
+        selfTrail = {segments = segments, history = {}, lastPoint = nil, idleTime = 0}
     end
     return selfTrail
 end
+
 local function hideSelfTrail()
     if not selfTrail then return end
     for _, l in ipairs(selfTrail.segments) do l.Visible = false end
 end
+
 local function destroySelfTrail()
     if not selfTrail then return end
     for _, l in ipairs(selfTrail.segments) do pcall(function() l:Remove() end) end
     selfTrail = nil
 end
 
-local function updateSelfTrail(color)
+local function updateSelfTrail()
     local char = LocalPlayer.Character
     if not char then hideSelfTrail(); return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -1073,28 +1105,51 @@ local function updateSelfTrail(color)
     if not hrp or not hum or hum.Health <= 0 then hideSelfTrail(); return end
 
     local t = getSelfTrail()
-    local backPoint = (hrp.CFrame * CFrame.new(0, 0, 0.8)).Position
+    local vel = hrp.AssemblyLinearVelocity
+    local horizSpeed = Vector3.new(vel.X, 0, vel.Z).Magnitude
+    local moving = horizSpeed >= TRAIL_MIN_SPEED
 
-    if not t.lastPoint or (backPoint - t.lastPoint).Magnitude >= TRAIL_SAMPLE_DIST then
-        table.insert(t.history, 1, backPoint)
-        t.lastPoint = backPoint
-        if #t.history > TRAIL_MAX_POINTS then table.remove(t.history) end
+    local behindPoint = (hrp.CFrame * CFrame.new(0, -TRAIL_BEHIND_DOWN, TRAIL_BEHIND_OFFSET)).Position
+
+    if moving then
+        t.idleTime = 0
+        if not t.lastPoint or (behindPoint - t.lastPoint).Magnitude >= TRAIL_SAMPLE_DIST then
+            table.insert(t.history, 1, behindPoint)
+            t.lastPoint = behindPoint
+            if #t.history > TRAIL_MAX_POINTS then table.remove(t.history) end
+        end
+    else
+        t.idleTime = t.idleTime + 0.05
+        if t.idleTime > 0.15 and #t.history > 0 then
+            table.remove(t.history)
+            t.lastPoint = t.history[1]
+        end
+        if #t.history == 0 then
+            hideSelfTrail()
+            return
+        end
     end
+
+    local baseColor = getTrailColor()
+    local visibleCount = #t.history
 
     for i = 1, #t.segments do
         local a = t.history[i]
         local b = t.history[i + 1]
-        if a and b then
+        if a and b and i < visibleCount then
             local sp1, on1 = Camera:WorldToViewportPoint(a)
             local sp2, on2 = Camera:WorldToViewportPoint(b)
             if on1 and on2 then
-                local alpha = 1 - (i / #t.segments)
+                local alpha = 1 - (i / visibleCount)
+                if t.idleTime > 0 then
+                    alpha = alpha * math.clamp(1 - t.idleTime * 1.5, 0, 1)
+                end
                 t.segments[i].From = Vector2.new(sp1.X, sp1.Y)
                 t.segments[i].To = Vector2.new(sp2.X, sp2.Y)
-                t.segments[i].Color = color
+                t.segments[i].Color = baseColor
                 t.segments[i].Transparency = alpha * 0.9
                 t.segments[i].Thickness = 4.5 * alpha + 1
-                t.segments[i].Visible = true
+                t.segments[i].Visible = alpha > 0.02
             else
                 t.segments[i].Visible = false
             end
@@ -1237,7 +1292,7 @@ local function hookLocalJump()
 end
 hookLocalJump()
 
--- ==================== DEATH FX (2s lifetime) ====================
+-- ==================== DEATH FX v2 ====================
 local function getCharSkeletonParts(char)
     local parts = {}
     parts.head = char:FindFirstChild("Head")
@@ -1249,6 +1304,66 @@ local function getCharSkeletonParts(char)
     return parts
 end
 
+local function spawnScorch(origin, color, lifetime)
+    local disc = Instance.new("Part")
+    disc.Name = "VarumaDeathFX"
+    disc.Shape = Enum.PartType.Cylinder
+    disc.Material = Enum.Material.Neon
+    disc.Color = color
+    disc.Size = Vector3.new(0.1, 6, 6)
+    disc.Transparency = 0.35
+    disc.Anchored = true
+    disc.CanCollide = false
+    disc.CanQuery = false
+    disc.CanTouch = false
+    disc.CastShadow = false
+    disc.CFrame = CFrame.new(origin - Vector3.new(0, 2.8, 0)) * CFrame.Angles(0, 0, math.rad(90))
+    disc:SetAttribute("VarumaBorn", tick())
+    disc.Parent = Workspace
+
+    local T = tick()
+    task.spawn(function()
+        while tick() - T < lifetime do
+            local p = (tick() - T) / lifetime
+            disc.Transparency = 0.35 + p * 0.6
+            local s = 1 + p * 1.4
+            disc.Size = Vector3.new(0.1, 6 * s, 6 * s)
+            task.wait(0.03)
+        end
+        if disc.Parent then disc:Destroy() end
+    end)
+end
+
+local function localShake(intensity, duration)
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+    local T = tick()
+    task.spawn(function()
+        while tick() - T < duration do
+            local p = 1 - (tick() - T) / duration
+            local off = Vector3.new(
+                (math.random() - 0.5) * intensity * p,
+                (math.random() - 0.5) * intensity * p,
+                0
+            )
+            cam.CFrame = cam.CFrame * CFrame.new(off)
+            task.wait(0.016)
+        end
+    end)
+end
+
+local function maybeShakeFor(origin, intensity, duration, maxDist)
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local d = (hrp.Position - origin).Magnitude
+    if d <= (maxDist or 25) then
+        local scale = 1 - (d / (maxDist or 25))
+        localShake(intensity * scale, duration)
+    end
+end
+
 local function spawnCS2ShockwaveEffect(char, color)
     if not char or not char.Parent then return end
     local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
@@ -1256,8 +1371,12 @@ local function spawnCS2ShockwaveEffect(char, color)
     local origin = hrp.Position
     local bornT = tick()
 
-    local shockParts = {}
-    local SHOCK_COUNT = 40
+    spawnScorch(origin, color, 2.0)
+    maybeShakeFor(origin, 1.2, 0.4, 30)
+
+    local shockParts, sparks = {}, {}
+    local SHOCK_COUNT, SPARK_COUNT = 56, 40
+
     for i = 1, SHOCK_COUNT do
         local p = Instance.new("Part")
         p.Name = "VarumaDeathFX"
@@ -1265,75 +1384,58 @@ local function spawnCS2ShockwaveEffect(char, color)
         p.Size = Vector3.new(0.5, 0.5, 0.5)
         p.Material = Enum.Material.Neon
         p.Color = color
-        p.Transparency = 0
         p.Anchored = true
-        p.CanCollide = false
-        p.CanQuery = false
-        p.CanTouch = false
-        p.CastShadow = false
+        p.CanCollide = false; p.CanQuery = false; p.CanTouch = false; p.CastShadow = false
         p.CFrame = CFrame.new(origin)
         p:SetAttribute("VarumaBorn", bornT)
         p.Parent = Workspace
 
         local angle = (i / SHOCK_COUNT) * math.pi * 2
-        local elevation = math.random() * 0.8 - 0.2
-        local radius = 8 + math.random() * 4
-        local endPos = origin + Vector3.new(
-            math.cos(angle) * radius,
-            elevation * 6,
-            math.sin(angle) * radius
-        )
-        table.insert(shockParts, {part = p, startPos = origin, endPos = endPos})
+        local elevation = math.random() * 0.9 - 0.2
+        local radius = 9 + math.random() * 5
+        table.insert(shockParts, {
+            part = p, startPos = origin,
+            endPos = origin + Vector3.new(math.cos(angle) * radius, elevation * 6, math.sin(angle) * radius)
+        })
     end
 
-    local sparks = {}
-    local SPARK_COUNT = 30
     for i = 1, SPARK_COUNT do
         local p = Instance.new("Part")
         p.Name = "VarumaDeathFX"
         p.Shape = Enum.PartType.Ball
         p.Size = Vector3.new(0.2, 0.2, 0.2)
         p.Material = Enum.Material.Neon
-        p.Color = color:Lerp(Color3.fromRGB(255, 255, 255), 0.6)
-        p.Transparency = 0
+        p.Color = color:Lerp(Color3.fromRGB(255, 255, 255), 0.65)
         p.Anchored = true
-        p.CanCollide = false
-        p.CanQuery = false
-        p.CanTouch = false
-        p.CastShadow = false
+        p.CanCollide = false; p.CanQuery = false; p.CanTouch = false; p.CastShadow = false
         p.CFrame = CFrame.new(origin)
         p:SetAttribute("VarumaBorn", bornT)
         p.Parent = Workspace
 
         local angle = math.random() * math.pi * 2
-        local elevation = math.random() * 1.2 - 0.3
-        local radius = 3 + math.random() * 6
-        local endPos = origin + Vector3.new(
-            math.cos(angle) * radius,
-            elevation * 8 + 2,
-            math.sin(angle) * radius
-        )
-        table.insert(sparks, {part = p, startPos = origin, endPos = endPos})
+        local elevation = math.random() * 1.4 - 0.3
+        local radius = 3 + math.random() * 7
+        table.insert(sparks, {
+            part = p, startPos = origin,
+            endPos = origin + Vector3.new(math.cos(angle) * radius, elevation * 9 + 2, math.sin(angle) * radius)
+        })
     end
 
-    local ring1 = {}
-    local ring2 = {}
-    local N = 32
+    local N = 40
+    local ring1, ring2 = {}, {}
     for i = 1, N do
-        local l1 = Drawing.new("Line"); l1.Thickness=3; l1.Transparency=1; l1.Color=color; l1.Visible=false
-        local l2 = Drawing.new("Line"); l2.Thickness=2; l2.Transparency=0.8; l2.Color=color:Lerp(Color3.fromRGB(255,255,255), 0.3); l2.Visible=false
-        ring1[i] = l1
-        ring2[i] = l2
+        local l1 = Drawing.new("Line"); l1.Thickness = 3; l1.Color = color; l1.Visible = false
+        local l2 = Drawing.new("Line"); l2.Thickness = 2; l2.Color = color:Lerp(Color3.fromRGB(255,255,255), 0.4); l2.Visible = false
+        ring1[i], ring2[i] = l1, l2
     end
 
     local light = Instance.new("PointLight")
-    light.Color = color
-    light.Brightness = 12
-    light.Range = 30
+    light.Color = color; light.Brightness = 14; light.Range = 34
     local lightAnchor = Instance.new("Part")
     lightAnchor.Name = "VarumaDeathLight"
-    lightAnchor.Anchored = true; lightAnchor.CanCollide = false; lightAnchor.CanQuery = false; lightAnchor.CanTouch = false
-    lightAnchor.Transparency = 1; lightAnchor.Size = Vector3.new(0.1,0.1,0.1)
+    lightAnchor.Anchored = true; lightAnchor.CanCollide = false
+    lightAnchor.CanQuery = false; lightAnchor.CanTouch = false
+    lightAnchor.Transparency = 1; lightAnchor.Size = Vector3.new(0.1, 0.1, 0.1)
     lightAnchor.CFrame = CFrame.new(origin)
     lightAnchor:SetAttribute("VarumaBorn", bornT)
     lightAnchor.Parent = Workspace
@@ -1343,52 +1445,49 @@ local function spawnCS2ShockwaveEffect(char, color)
     local startT = tick()
     task.spawn(function()
         while tick() - startT < LIFETIME do
-            local elapsed = tick() - startT
-            local progress = math.clamp(elapsed / LIFETIME, 0, 1)
+            local progress = math.clamp((tick() - startT) / LIFETIME, 0, 1)
 
-            local shockEased = 1 - math.pow(1 - progress, 4)
-            for _, obj in ipairs(shockParts) do
-                if obj.part and obj.part.Parent then
-                    obj.part.CFrame = CFrame.new(obj.startPos:Lerp(obj.endPos, shockEased))
-                    obj.part.Transparency = math.clamp(progress * 1.5, 0, 1)
+            local se = 1 - math.pow(1 - progress, 4)
+            for _, o in ipairs(shockParts) do
+                if o.part and o.part.Parent then
+                    o.part.CFrame = CFrame.new(o.startPos:Lerp(o.endPos, se))
+                    o.part.Transparency = math.clamp(progress * 1.5, 0, 1)
                     local s = 0.5 * (1 - progress * 0.8)
-                    obj.part.Size = Vector3.new(s, s, s)
+                    o.part.Size = Vector3.new(s, s, s)
                 end
             end
 
-            local sparkEased = 1 - math.pow(1 - progress, 2)
-            for _, obj in ipairs(sparks) do
-                if obj.part and obj.part.Parent then
-                    local pos = obj.startPos:Lerp(obj.endPos, sparkEased)
-                    pos = pos - Vector3.new(0, progress * progress * 8, 0)
-                    obj.part.CFrame = CFrame.new(pos)
-                    obj.part.Transparency = math.clamp(progress * 1.3, 0, 1)
+            local spe = 1 - math.pow(1 - progress, 2)
+            for _, o in ipairs(sparks) do
+                if o.part and o.part.Parent then
+                    local pos = o.startPos:Lerp(o.endPos, spe) - Vector3.new(0, progress * progress * 9, 0)
+                    o.part.CFrame = CFrame.new(pos)
+                    o.part.Transparency = math.clamp(progress * 1.3, 0, 1)
                     local s = 0.2 * (1 - progress)
-                    obj.part.Size = Vector3.new(s, s, s)
+                    o.part.Size = Vector3.new(s, s, s)
                 end
             end
 
-            local center2D, onScreen = Camera:WorldToViewportPoint(origin - Vector3.new(0, 3, 0))
-            if onScreen then
-                local scaleFactor = 250 / math.max(center2D.Z, 1)
-                local r1 = math.clamp((progress * 40) * scaleFactor, 5, 300)
+            local c2d, onS = Camera:WorldToViewportPoint(origin - Vector3.new(0, 3, 0))
+            if onS then
+                local scaleF = 260 / math.max(c2d.Z, 1)
+                local r1 = math.clamp(progress * 44 * scaleF, 5, 320)
                 for i = 1, N do
                     local a1 = (i / N) * math.pi * 2
                     local a2 = ((i + 1) / N) * math.pi * 2
-                    ring1[i].From = Vector2.new(center2D.X + math.cos(a1) * r1, center2D.Y + math.sin(a1) * r1 * 0.4)
-                    ring1[i].To = Vector2.new(center2D.X + math.cos(a2) * r1, center2D.Y + math.sin(a2) * r1 * 0.4)
+                    ring1[i].From = Vector2.new(c2d.X + math.cos(a1) * r1, c2d.Y + math.sin(a1) * r1 * 0.42)
+                    ring1[i].To   = Vector2.new(c2d.X + math.cos(a2) * r1, c2d.Y + math.sin(a2) * r1 * 0.42)
                     ring1[i].Transparency = 1 - progress
                     ring1[i].Visible = true
                 end
-
-                local r2p = math.clamp((progress - 0.2) / 0.8, 0, 1)
+                local r2p = math.clamp((progress - 0.18) / 0.82, 0, 1)
                 if r2p > 0 then
-                    local r2 = math.clamp((r2p * 30) * scaleFactor, 5, 220)
+                    local r2 = math.clamp(r2p * 32 * scaleF, 5, 240)
                     for i = 1, N do
                         local a1 = (i / N) * math.pi * 2
                         local a2 = ((i + 1) / N) * math.pi * 2
-                        ring2[i].From = Vector2.new(center2D.X + math.cos(a1) * r2, center2D.Y + math.sin(a1) * r2 * 0.4)
-                        ring2[i].To = Vector2.new(center2D.X + math.cos(a2) * r2, center2D.Y + math.sin(a2) * r2 * 0.4)
+                        ring2[i].From = Vector2.new(c2d.X + math.cos(a1) * r2, c2d.Y + math.sin(a1) * r2 * 0.42)
+                        ring2[i].To   = Vector2.new(c2d.X + math.cos(a2) * r2, c2d.Y + math.sin(a2) * r2 * 0.42)
                         ring2[i].Transparency = 1 - r2p
                         ring2[i].Visible = true
                     end
@@ -1400,15 +1499,14 @@ local function spawnCS2ShockwaveEffect(char, color)
             end
 
             if light and light.Parent then
-                light.Brightness = 12 * (1 - progress)
-                light.Range = 30 * (1 - progress * 0.6)
+                light.Brightness = 14 * (1 - progress)
+                light.Range = 34 * (1 - progress * 0.6)
             end
-
             task.wait(0.03)
         end
 
-        for _, obj in ipairs(shockParts) do if obj.part and obj.part.Parent then obj.part:Destroy() end end
-        for _, obj in ipairs(sparks) do if obj.part and obj.part.Parent then obj.part:Destroy() end end
+        for _, o in ipairs(shockParts) do if o.part and o.part.Parent then o.part:Destroy() end end
+        for _, o in ipairs(sparks)     do if o.part and o.part.Parent then o.part:Destroy() end end
         for i = 1, N do pcall(function() ring1[i]:Remove() end); pcall(function() ring2[i]:Remove() end) end
         if light and light.Parent then light:Destroy() end
         if lightAnchor and lightAnchor.Parent then lightAnchor:Destroy() end
@@ -1422,11 +1520,13 @@ local function spawnNovaRingEffect(char, color)
     local origin = hrp.Position
     local bornT = tick()
 
+    spawnScorch(origin, color, 2.0)
+    maybeShakeFor(origin, 0.8, 0.5, 28)
+
+    local RINGS, PER_RING = 4, 28
     local rings = {}
-    local RINGS = 3
-    local PER_RING = 24
-    for ringIdx = 1, RINGS do
-        local ringParts = {}
+    for ri = 1, RINGS do
+        local row = {}
         for i = 1, PER_RING do
             local p = Instance.new("Part")
             p.Name = "VarumaDeathFX"
@@ -1434,29 +1534,23 @@ local function spawnNovaRingEffect(char, color)
             p.Size = Vector3.new(0.5, 0.5, 0.5)
             p.Material = Enum.Material.Neon
             p.Color = color
-            p.Transparency = 0
             p.Anchored = true
-            p.CanCollide = false
-            p.CanQuery = false
-            p.CanTouch = false
-            p.CastShadow = false
+            p.CanCollide = false; p.CanQuery = false; p.CanTouch = false; p.CastShadow = false
             p.CFrame = CFrame.new(origin)
             p:SetAttribute("VarumaBorn", bornT)
             p.Parent = Workspace
-            table.insert(ringParts, p)
+            table.insert(row, p)
         end
-        table.insert(rings, ringParts)
+        table.insert(rings, row)
     end
 
     local light = Instance.new("PointLight")
-    light.Color = color
-    light.Brightness = 10
-    light.Range = 25
+    light.Color = color; light.Brightness = 11; light.Range = 28
     local lightAnchor = Instance.new("Part")
     lightAnchor.Name = "VarumaDeathLight"
     lightAnchor.Anchored = true; lightAnchor.CanCollide = false
     lightAnchor.CanQuery = false; lightAnchor.CanTouch = false
-    lightAnchor.Transparency = 1; lightAnchor.Size = Vector3.new(0.1,0.1,0.1)
+    lightAnchor.Transparency = 1; lightAnchor.Size = Vector3.new(0.1, 0.1, 0.1)
     lightAnchor.CFrame = CFrame.new(origin)
     lightAnchor:SetAttribute("VarumaBorn", bornT)
     lightAnchor.Parent = Workspace
@@ -1467,37 +1561,39 @@ local function spawnNovaRingEffect(char, color)
     task.spawn(function()
         while tick() - startT < LIFETIME do
             local elapsed = tick() - startT
-            for ringIdx, ringParts in ipairs(rings) do
-                local ringDelay = (ringIdx - 1) * 0.2
-                local rp = math.clamp((elapsed - ringDelay) / (LIFETIME - 0.4), 0, 1)
+            local globalP = math.clamp(elapsed / LIFETIME, 0, 1)
+
+            for ri, row in ipairs(rings) do
+                local delay = (ri - 1) * 0.15
+                local rp = math.clamp((elapsed - delay) / (LIFETIME - 0.3), 0, 1)
                 if rp > 0 then
                     local re = 1 - math.pow(1 - rp, 3)
-                    local radius = re * (8 + ringIdx * 5)
-                    local yOffset = re * 4 + ringIdx * 1.5
-                    local tilt = elapsed * 2 * ringIdx
-
-                    for i, orb in ipairs(ringParts) do
+                    local radius = re * (7 + ri * 4.5)
+                    local yOff = re * 5 + ri * 1.6
+                    local tilt = elapsed * 2.2 * ri
+                    local pulse = 1 + math.sin(elapsed * 12 + ri) * 0.15
+                    for i, orb in ipairs(row) do
                         if orb and orb.Parent then
                             local angle = (i / PER_RING) * math.pi * 2 + tilt
                             local x = math.cos(angle) * radius
                             local z = math.sin(angle) * radius
-                            orb.CFrame = CFrame.new(origin + Vector3.new(x, yOffset, z))
+                            orb.CFrame = CFrame.new(origin + Vector3.new(x, yOff, z))
                             orb.Transparency = math.clamp(rp * 1.1, 0, 1)
-                            orb.Size = Vector3.new(0.5, 0.5, 0.5) * (1 - rp * 0.7)
+                            local s = 0.5 * (1 - rp * 0.7) * pulse
+                            orb.Size = Vector3.new(s, s, s)
                         end
                     end
                 end
             end
+
             if light and light.Parent then
-                local lp = math.clamp(elapsed / LIFETIME, 0, 1)
-                light.Brightness = 10 * (1 - lp)
-                light.Range = 25 * (1 - lp * 0.5)
+                light.Brightness = 11 * (1 - globalP)
+                light.Range = 28 * (1 - globalP * 0.5)
             end
             task.wait(0.03)
         end
-
-        for _, ringParts in ipairs(rings) do
-            for _, orb in ipairs(ringParts) do if orb and orb.Parent then orb:Destroy() end end
+        for _, row in ipairs(rings) do
+            for _, orb in ipairs(row) do if orb and orb.Parent then orb:Destroy() end end
         end
         if light and light.Parent then light:Destroy() end
         if lightAnchor and lightAnchor.Parent then lightAnchor:Destroy() end
@@ -1511,47 +1607,64 @@ local function spawnShatterEffect(char, color)
     local origin = sp.torso.Position
     local bornT = tick()
 
-    local shards = {}
-    local SHARDS = 50
+    spawnScorch(origin, color, 1.8)
+    maybeShakeFor(origin, 1.0, 0.35, 25)
+
+    local shards, secondary = {}, {}
+    local SHARDS, SECONDARY = 60, 24
+
     for i = 1, SHARDS do
         local p = Instance.new("Part")
         p.Name = "VarumaDeathFX"
         p.Size = Vector3.new(0.3, 0.3, 0.15)
         p.Material = Enum.Material.Neon
         p.Color = color
-        p.Transparency = 0
         p.Anchored = true
-        p.CanCollide = false
-        p.CanQuery = false
-        p.CanTouch = false
-        p.CastShadow = false
+        p.CanCollide = false; p.CanQuery = false; p.CanTouch = false; p.CastShadow = false
         p.CFrame = CFrame.new(origin)
         p:SetAttribute("VarumaBorn", bornT)
         p.Parent = Workspace
 
         local angle = math.random() * math.pi * 2
-        local elev = math.random() * 1.5 - 0.4
-        local radius = 5 + math.random() * 8
-        local endPos = origin + Vector3.new(
-            math.cos(angle) * radius,
-            elev * 10 + 3,
-            math.sin(angle) * radius
-        )
+        local elev = math.random() * 1.6 - 0.4
+        local radius = 5 + math.random() * 9
         table.insert(shards, {
-            part = p, startPos = origin, endPos = endPos,
-            rotSpeed = Vector3.new(math.random(-800, 800), math.random(-800, 800), math.random(-800, 800))
+            part = p, startPos = origin,
+            endPos = origin + Vector3.new(math.cos(angle) * radius, elev * 11 + 3, math.sin(angle) * radius),
+            rotSpeed = Vector3.new(math.random(-900, 900), math.random(-900, 900), math.random(-900, 900))
+        })
+    end
+
+    for i = 1, SECONDARY do
+        local p = Instance.new("Part")
+        p.Name = "VarumaDeathFX"
+        p.Shape = Enum.PartType.Ball
+        p.Size = Vector3.new(0.18, 0.18, 0.18)
+        p.Material = Enum.Material.Neon
+        p.Color = color:Lerp(Color3.fromRGB(255, 255, 255), 0.5)
+        p.Anchored = true
+        p.CanCollide = false; p.CanQuery = false; p.CanTouch = false; p.CastShadow = false
+        p.CFrame = CFrame.new(origin)
+        p:SetAttribute("VarumaBorn", bornT)
+        p.Parent = Workspace
+
+        local angle = math.random() * math.pi * 2
+        local elev = math.random() * 0.6 - 0.1
+        local radius = 2 + math.random() * 5
+        table.insert(secondary, {
+            part = p, startPos = origin,
+            endPos = origin + Vector3.new(math.cos(angle) * radius, elev * 7 + 1, math.sin(angle) * radius),
+            spawnAt = math.random(0.35, 0.6)
         })
     end
 
     local light = Instance.new("PointLight")
-    light.Color = color
-    light.Brightness = 15
-    light.Range = 30
+    light.Color = color; light.Brightness = 15; light.Range = 30
     local lightAnchor = Instance.new("Part")
     lightAnchor.Name = "VarumaDeathLight"
     lightAnchor.Anchored = true; lightAnchor.CanCollide = false
     lightAnchor.CanQuery = false; lightAnchor.CanTouch = false
-    lightAnchor.Transparency = 1; lightAnchor.Size = Vector3.new(0.1,0.1,0.1)
+    lightAnchor.Transparency = 1; lightAnchor.Size = Vector3.new(0.1, 0.1, 0.1)
     lightAnchor.CFrame = CFrame.new(origin)
     lightAnchor:SetAttribute("VarumaBorn", bornT)
     lightAnchor.Parent = Workspace
@@ -1565,16 +1678,30 @@ local function spawnShatterEffect(char, color)
             local progress = math.clamp(elapsed / LIFETIME, 0, 1)
             local eased = 1 - math.pow(1 - progress, 2)
 
-            for _, obj in ipairs(shards) do
-                if obj.part and obj.part.Parent then
-                    local pos = obj.startPos:Lerp(obj.endPos, eased)
-                    pos = pos - Vector3.new(0, progress * progress * 12, 0)
-                    obj.part.CFrame = CFrame.new(pos) * CFrame.Angles(
-                        math.rad(obj.rotSpeed.X * elapsed),
-                        math.rad(obj.rotSpeed.Y * elapsed),
-                        math.rad(obj.rotSpeed.Z * elapsed)
+            for _, o in ipairs(shards) do
+                if o.part and o.part.Parent then
+                    local pos = o.startPos:Lerp(o.endPos, eased) - Vector3.new(0, progress * progress * 13, 0)
+                    o.part.CFrame = CFrame.new(pos) * CFrame.Angles(
+                        math.rad(o.rotSpeed.X * elapsed),
+                        math.rad(o.rotSpeed.Y * elapsed),
+                        math.rad(o.rotSpeed.Z * elapsed)
                     )
-                    obj.part.Transparency = math.clamp(progress * 1.2, 0, 1)
+                    o.part.Transparency = math.clamp(progress * 1.2, 0, 1)
+                end
+            end
+
+            for _, o in ipairs(secondary) do
+                if o.part and o.part.Parent then
+                    if progress >= o.spawnAt then
+                        local lp = (progress - o.spawnAt) / (1 - o.spawnAt)
+                        local pos = o.startPos:Lerp(o.endPos, 1 - math.pow(1 - lp, 2))
+                        o.part.CFrame = CFrame.new(pos)
+                        o.part.Transparency = math.clamp(lp * 1.3, 0, 1)
+                        local s = 0.18 * (1 - lp)
+                        o.part.Size = Vector3.new(s, s, s)
+                    else
+                        o.part.Transparency = 1
+                    end
                 end
             end
 
@@ -1582,11 +1709,11 @@ local function spawnShatterEffect(char, color)
                 light.Brightness = 15 * (1 - progress)
                 light.Range = 30 * (1 - progress * 0.5)
             end
-
             task.wait(0.03)
         end
 
-        for _, obj in ipairs(shards) do if obj.part and obj.part.Parent then obj.part:Destroy() end end
+        for _, o in ipairs(shards)    do if o.part and o.part.Parent then o.part:Destroy() end end
+        for _, o in ipairs(secondary) do if o.part and o.part.Parent then o.part:Destroy() end end
         if light and light.Parent then light:Destroy() end
         if lightAnchor and lightAnchor.Parent then lightAnchor:Destroy() end
     end)
@@ -1906,9 +2033,31 @@ FLayout.FillDirection = Enum.FillDirection.Horizontal
 FLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 FLayout.SortOrder = Enum.SortOrder.LayoutOrder
 
+local TabIndicator = Instance.new("Frame")
+TabIndicator.Name = "TabIndicator"
+TabIndicator.Parent = Footer
+TabIndicator.BackgroundColor3 = Color3.fromRGB(239, 68, 68)
+TabIndicator.BorderSizePixel = 0
+TabIndicator.Size = UDim2.new(0, 40, 0, 2)
+TabIndicator.Position = UDim2.new(0, 0, 1, -2)
+TabIndicator.ZIndex = 5
+TabIndicator.AnchorPoint = Vector2.new(0.5, 0)
+
+local TabIndicatorGlow = Instance.new("Frame")
+TabIndicatorGlow.Name = "TabIndicatorGlow"
+TabIndicatorGlow.Parent = Footer
+TabIndicatorGlow.BackgroundColor3 = Color3.fromRGB(239, 68, 68)
+TabIndicatorGlow.BackgroundTransparency = 0.7
+TabIndicatorGlow.BorderSizePixel = 0
+TabIndicatorGlow.Size = UDim2.new(0, 60, 0, 6)
+TabIndicatorGlow.Position = UDim2.new(0, 0, 1, -4)
+TabIndicatorGlow.ZIndex = 4
+TabIndicatorGlow.AnchorPoint = Vector2.new(0.5, 0)
+
 local tabs = {"rage", "legit", "visuals", "fling", "misc"}
 local contentFrames = {}
 local columnFrames = {}
+local tabButtons = {}
 
 local Body = Instance.new("ScrollingFrame")
 Body.Parent = MenuFrame
@@ -2328,7 +2477,15 @@ AddCard("visuals", "Self Chams", "transparent highlight on you", false, function
 })
 AddCard("visuals", "Gun Chams", "gun highlight", true, function(v) Config.Visuals.GunChams = v end, "Visuals.GunChams")
 AddCard("visuals", "Bullet Tracers", "shot line", false, function(v) Config.Visuals.BulletTracers = v end, "Visuals.BulletTracers")
-AddCard("visuals", "Player Trails", "self motion trail", false, function(v) Config.Visuals.PlayerTrails = v end, "Visuals.PlayerTrails")
+
+AddCard("visuals", "Player Trails", "line behind back (only when moving)", false,
+    function(v) Config.Visuals.PlayerTrails = v end,
+    "Visuals.PlayerTrails", {
+        {kind = "cycle", title = "Color", options = trailColorNames, default = 1,
+         callback = function(i) Config.Visuals.PlayerTrailColor = i end,
+         configPath = "Visuals.PlayerTrailColor"}
+    })
+
 AddCard("visuals", "Jump Effect", "burst on jump", false, function(v) Config.Visuals.JumpEffect = v end, "Visuals.JumpEffect", {
     {kind = "cycle", title = "Color", options = jumpColorNames, default = 2, callback = function(i) Config.Visuals.JumpEffectColor = i end, configPath = "Visuals.JumpEffectColor"}
 })
@@ -2500,7 +2657,7 @@ AddActionCard("misc", "Unload", "remove script", "UNLOAD", function()
     end)
 end, "left")
 
--- ==================== CONFIG UI (короткий список) ====================
+-- ==================== CONFIG UI ====================
 local miscContent = contentFrames["misc"]
 local ConfigSection = Instance.new("Frame")
 ConfigSection.Parent = miscContent
@@ -2677,7 +2834,37 @@ SaveBtn.MouseButton1Click:Connect(function()
 end)
 rebuildConfigList()
 
--- ==================== TABS BUTTONS ====================
+-- ==================== TABS + SLIDING INDICATOR ====================
+local function moveTabIndicator(tabBtn, instant)
+    if not tabBtn then return end
+    task.defer(function()
+        local btnX = tabBtn.AbsolutePosition.X
+        local btnW = tabBtn.AbsoluteSize.X
+        local footerX = Footer.AbsolutePosition.X
+        local footerW = Footer.AbsoluteSize.X
+        if footerW <= 0 then return end
+        local localCenter = (btnX + btnW / 2) - footerX
+        local scaleCenter = localCenter / footerW
+        local targetPos = UDim2.new(scaleCenter, 0, 1, -2)
+        local glowTarget = UDim2.new(scaleCenter, 0, 1, -4)
+        local targetSize = UDim2.new(0, math.max(btnW * 0.6, 30), 0, 2)
+        local glowSize = UDim2.new(0, math.max(btnW * 0.85, 45), 0, 6)
+        if instant then
+            TabIndicator.Position = targetPos
+            TabIndicator.Size = targetSize
+            TabIndicatorGlow.Position = glowTarget
+            TabIndicatorGlow.Size = glowSize
+        else
+            TweenService:Create(TabIndicator, TweenInfo.new(0.28, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+                Position = targetPos, Size = targetSize
+            }):Play()
+            TweenService:Create(TabIndicatorGlow, TweenInfo.new(0.32, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+                Position = glowTarget, Size = glowSize
+            }):Play()
+        end
+    end)
+end
+
 for i, tabName in ipairs(tabs) do
     local tabBtn = Instance.new("TextButton")
     tabBtn.Parent = Footer
@@ -2690,16 +2877,37 @@ for i, tabName in ipairs(tabs) do
     tabBtn.TextSize = 8
     tabBtn.ZIndex = 3
 
+    tabButtons[tabName] = tabBtn
+
     tabBtn.MouseButton1Click:Connect(function()
         for _, f in pairs(contentFrames) do f.Visible = false end
         contentFrames[tabName].Visible = true
         CatTag.Text = "  " .. tabName
         for _, child in ipairs(Footer:GetChildren()) do
-            if child:IsA("TextButton") then child.TextColor3 = Color3.fromRGB(150,160,175) end
+            if child:IsA("TextButton") then
+                TweenService:Create(child, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(150,160,175)}):Play()
+            end
         end
-        tabBtn.TextColor3 = Color3.fromRGB(239,68,68)
+        TweenService:Create(tabBtn, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(239,68,68)}):Play()
+        moveTabIndicator(tabBtn, false)
     end)
 end
+
+task.spawn(function()
+    task.wait(0.15)
+    moveTabIndicator(tabButtons[tabs[1]], true)
+end)
+
+pcall(function()
+    MenuFrame:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+        for name, btn in pairs(tabButtons) do
+            if btn.TextColor3 == Color3.fromRGB(239,68,68) then
+                moveTabIndicator(btn, true)
+                break
+            end
+        end
+    end)
+end)
 
 WMClick.MouseButton1Click:Connect(function()
     MenuFrame.Visible = not MenuFrame.Visible
@@ -3150,7 +3358,7 @@ RunService.RenderStepped:Connect(function(dt)
     end
 
     if Config.Visuals.PlayerTrails then
-        updateSelfTrail(Color3.fromRGB(255, 80, 80))
+        updateSelfTrail()
     else
         hideSelfTrail()
     end
@@ -3216,3 +3424,6 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         updateWatermarkText()
     end
 end)
+
+-- DEBUG CHECKPOINT
+warn("[Varuma] === LOAD COMPLETE ===")
